@@ -1,0 +1,164 @@
+name: Build Puppet Environment
+
+on:
+  push:
+    branches:
+      - production
+      - qa
+      - test
+      - 'test_**'
+
+env:
+  G10K_VERSION: '0.9.9'
+
+jobs:
+  build:
+    name: Build Puppet Environment with g10k
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set environment name from branch
+        id: set-env
+        run: |
+          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
+          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "Environment: ${BRANCH_NAME}"
+
+      - name: Install g10k
+        run: |
+          echo "Installing g10k version ${G10K_VERSION}"
+          wget -q https://github.com/xorpaul/g10k/releases/download/v${G10K_VERSION}/g10k-linux-amd64.zip
+          unzip -q g10k-linux-amd64.zip
+          chmod +x g10k
+          sudo mv g10k /usr/local/bin/
+          g10k -version
+
+      - name: Create output directory structure
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          mkdir -p output/environments/${ENV_NAME}
+          echo "Created directory structure for environment: ${ENV_NAME}"
+
+      - name: Copy environment files
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          ENV_DIR="output/environments/${ENV_NAME}"
+
+          # Copy Puppetfile
+          cp Puppetfile ${ENV_DIR}/
+
+          # Copy manifests
+          cp -r manifests ${ENV_DIR}/
+
+          # Copy local modules
+          cp -r modules ${ENV_DIR}/
+
+          echo "Environment files copied to ${ENV_DIR}"
+
+      - name: Create g10k config for this environment
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          cat > g10k-run.yaml <<EOF
+          cachedir: '.g10k/cache'
+
+          git:
+            privatekey: ''
+
+          sources:
+            puppet:
+              basedir: './output/environments/${ENV_NAME}'
+              prefix: false
+
+          forge:
+            baseurl: 'https://forge.puppet.com'
+
+          deploy:
+            purge_levels: ['deployment', 'puppetfile']
+
+          maxworker: 50
+          use_cache: true
+          EOF
+
+          cat g10k-run.yaml
+
+      - name: Run g10k to fetch Puppet modules
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+
+          # Create a temporary Puppetfile config for g10k
+          cat > g10k-puppetfile.yaml <<EOF
+          cachedir: '.g10k/cache'
+
+          sources:
+            puppet:
+              basedir: './output/environments'
+              environments:
+                ${ENV_NAME}:
+                  puppetfile: './Puppetfile'
+
+          forge:
+            baseurl: 'https://forge.puppet.com'
+
+          maxworker: 50
+          EOF
+
+          # Run g10k
+          g10k -config g10k-puppetfile.yaml -verbose
+
+          echo "Modules fetched successfully"
+
+      - name: List generated environment structure
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          echo "=== Environment structure for ${ENV_NAME} ==="
+          ls -lah output/environments/${ENV_NAME}/
+          echo ""
+          echo "=== Modules in forge directory ==="
+          ls -lah output/environments/${ENV_NAME}/forge/ || echo "No forge directory"
+
+      - name: Create final artifact structure
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+
+          # Create the final code directory structure
+          mkdir -p artifact/code/environments
+
+          # Copy the built environment
+          cp -r output/environments/${ENV_NAME} artifact/code/environments/
+
+          # Create environment.conf if it doesn't exist
+          if [ ! -f artifact/code/environments/${ENV_NAME}/environment.conf ]; then
+            cat > artifact/code/environments/${ENV_NAME}/environment.conf <<EOF
+          # Environment configuration
+          modulepath = modules:forge:\$basemodulepath
+          manifest = manifests/site.pp
+          EOF
+          fi
+
+          echo "Final artifact structure created"
+          du -sh artifact/code/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: puppet-environment-${{ steps.set-env.outputs.branch_name }}-${{ github.sha }}
+          path: artifact/code/
+          retention-days: 30
+          compression-level: 9
+
+      - name: Build summary
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${ENV_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Commit:** ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Environment Structure" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          tree -L 3 artifact/code/ || find artifact/code/ -maxdepth 3 -print
+          echo '```' >> $GITHUB_STEP_SUMMARY

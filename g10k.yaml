@@ -1,0 +1,56 @@
+# g10k configuration file
+# https://github.com/xorpaul/g10k
+
+# Cache directory for Git repositories
+cachedir: '.g10k/cache'
+
+# Git settings
+git:
+  # Use SSH agent for Git operations
+  privatekey: ''
+  # Git username (optional)
+  username: ''
+
+# Source configuration
+sources:
+  puppet:
+    # Use the current repository/directory
+    # In GitHub Actions, this will be the checked out repository
+    basedir: './output'
+
+    # Prefix for environment directories (optional)
+    prefix: false
+
+    # Force checkout even if destination exists
+    force_forge_versions: false
+
+# Forge settings
+forge:
+  # Forge base URL
+  baseurl: 'https://forge.puppet.com'
+
+# Deployment settings
+deploy:
+  # Purge unmanaged modules
+  purge_levels: ['deployment', 'puppetfile']
+
+  # Generate types after deployment
+  generate_types: false
+
+  # Purge skip list (directories to keep)
+  purge_skip_list: []
+
+# Retry settings for Git operations
+retry_git_commands: 3
+
+# Timeout for Git operations (in seconds)
+timeout: 300
+
+# Maximum number of Go routines for parallel operations
+maxworker: 50
+
+# Use caching
+use_cache: true
+
+# Verbose logging
+verbose: false
