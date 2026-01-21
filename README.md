@@ -74,19 +74,11 @@ Each branch creates a separate Puppet environment.
 - Self-hosted GitHub Actions runner with label `self-hosted`
 - SSH access to Puppet servers
 - rsync installed on runner
-- SSH key-based authentication configured
-
-### Required GitHub Variables
-
-Configure these variables in your repository (Settings → Secrets and variables → Actions → Variables):
-
-- **`PUPPET_SERVERS`**: Comma-separated list of all Puppet servers (e.g., `puppet1.example.com,puppet2.example.com,puppet3.example.com`)
-- **`PUPPET_RSYNC_USER`**: SSH user for deployment (default: `root`)
-- **`PUPPET_ADMIN_API_PORT`**: Puppet Admin API port (default: `8140`)
-
-**Note**: All environments (production, qa, test) are deployed to the same set of Puppet servers. Each environment creates a separate directory on the servers.
+- SSH key-based authentication configured (see Setup section)
 
 ## Setup
+
+Follow these steps to configure the pipeline:
 
 ### GitHub App for Private Modules (Optional)
 
@@ -203,6 +195,51 @@ Then add the secret:
 - Key can be rotated via GitHub UI
 - Works across multiple self-hosted runners
 - Easier to audit and manage centrally
+
+### Configure Required GitHub Variables
+
+Configure these variables in your repository (Settings → Secrets and variables → Actions → Variables):
+
+**Required:**
+- **`PUPPET_SERVERS`**: Comma-separated list of all Puppet servers
+  - Example: `puppet1.example.com,puppet2.example.com,puppet3.example.com`
+  - All environments (production, qa, test) deploy to these servers
+  - Each environment creates its own directory: `/etc/puppetlabs/code/environments/{env_name}/`
+
+**Optional (with defaults):**
+- **`PUPPET_RSYNC_USER`**: SSH user for deployment
+  - Default: `root`
+  - Example: `puppet-deploy`
+- **`PUPPET_ADMIN_API_PORT`**: Puppet Admin API port
+  - Default: `8140`
+  - Change if using non-standard port
+
+**How to add variables:**
+1. Go to your repository on GitHub
+2. Navigate to Settings → Secrets and variables → Actions
+3. Click on the "Variables" tab
+4. Click "New repository variable"
+5. Add each variable with its value
+
+### Summary: Required Configuration
+
+Before running the pipeline, ensure you have configured:
+
+**Secrets (for private modules - optional):**
+- ✅ `GH_APP_ID` - GitHub App ID
+- ✅ `GH_APP_PRIVATE_KEY` - GitHub App private key
+
+**Secrets (for deployment - required):**
+- ✅ `PUPPET_DEPLOY_SSH_KEY` - SSH private key for Puppet servers
+
+**Variables (required):**
+- ✅ `PUPPET_SERVERS` - List of Puppet servers
+
+**Variables (optional):**
+- `PUPPET_RSYNC_USER` (default: root)
+- `PUPPET_ADMIN_API_PORT` (default: 8140)
+
+The workflow will validate these settings and fail with clear error messages if required configuration is missing.
 
 ## Usage
 
