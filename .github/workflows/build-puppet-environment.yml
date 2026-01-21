@@ -91,21 +91,18 @@ jobs:
           ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
           ENV_DIR="output/environments/${ENV_NAME}"
 
-          # Copy Puppetfile
-          cp Puppetfile ${ENV_DIR}/
-
-          # Copy manifests
-          cp -r manifests ${ENV_DIR}/
-
-          # Copy local modules (if they exist)
-          if [ -d "modules" ]; then
-            cp -r modules ${ENV_DIR}/
-            echo "Custom modules copied"
-          else
-            echo "No custom modules directory found (optional)"
-          fi
+          # Copy all files except CI/CD and generated directories
+          rsync -av \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.g10k/' \
+            --exclude='output/' \
+            --exclude='artifact/' \
+            ./ ${ENV_DIR}/
 
           echo "Environment files copied to ${ENV_DIR}"
+          echo "Contents:"
+          ls -la ${ENV_DIR}/
 
       - name: Create g10k config for this environment
         run: |
