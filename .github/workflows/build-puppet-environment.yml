@@ -20,9 +20,6 @@ on:
         type: boolean
         default: false
 
-env:
-  G10K_VERSION: '0.9.9'
-
 # Ensure only one deployment runs at a time per environment
 concurrency:
   group: puppet-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
@@ -71,14 +68,11 @@ jobs:
           restore-keys: |
             g10k-cache-
 
-      - name: Install g10k
+      - name: Install r10k for Puppetfile processing
         run: |
-          echo "Installing g10k version ${G10K_VERSION}"
-          wget -q https://github.com/xorpaul/g10k/releases/download/v${G10K_VERSION}/g10k-linux-amd64.zip
-          unzip -q g10k-linux-amd64.zip
-          chmod +x g10k
-          sudo mv g10k /usr/local/bin/
-          g10k -version
+          echo "Installing r10k for Puppetfile module installation"
+          sudo gem install r10k --no-document
+          r10k version
 
       - name: Create output directory structure
         run: |
@@ -130,7 +124,7 @@ jobs:
 
           cat g10k-run.yaml
 
-      - name: Run g10k to fetch Puppet modules
+      - name: Run r10k to install Puppet modules from Puppetfile
         run: |
           ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
           ENV_DIR="./output/environments/${ENV_NAME}"
@@ -146,42 +140,19 @@ jobs:
           cat "${ENV_DIR}/Puppetfile"
           echo ""
 
-          # Create g10k config that uses the environment directory
-          cat > g10k-puppetfile.yaml <<EOF
-          cachedir: '.g10k/cache'
+          # Change to environment directory
+          cd "${ENV_DIR}"
 
-          sources:
-            puppet:
-              remote: 'file://.'
-              basedir: './output/environments'
-
-          forge:
-            baseurl: 'https://forge.puppet.com'
-
-          maxworker: 50
-          use_cache: true
-          EOF
-
-          cat g10k-puppetfile.yaml
-          echo ""
-          echo "Running g10k to fetch modules from Puppetfile..."
-
-          # Run g10k with explicit environment specification
-          # Format: <source>_<environment>, e.g., puppet_production
-          g10k -config g10k-puppetfile.yaml -environment puppet_${ENV_NAME} -verbose
+          # Run r10k puppetfile install
+          # This will read Puppetfile and install modules into ./forge/
+          echo "Running r10k puppetfile install..."
+          r10k puppetfile install --verbose --moduledir=./forge
 
           echo ""
-          echo "Modules fetched successfully"
+          echo "Modules installed successfully"
           echo ""
-          echo "Checking for forge directory with installed modules:"
-          ls -lah output/environments/${ENV_NAME}/forge/ 2>/dev/null || echo "No forge directory found - check if Puppetfile has modules"
-
-          if [ -d "${ENV_DIR}/forge" ]; then
-            echo "Modules successfully fetched:"
-            ls -la "${ENV_DIR}/forge/"
-          else
-            echo "WARNING: No forge directory created - check if Puppetfile has modules"
-          fi
+          echo "Installed modules in forge directory:"
+          ls -lah forge/ 2>/dev/null || echo "No modules installed - check Puppetfile"
 
       - name: List generated environment structure
         run: |
