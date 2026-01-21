@@ -1,4 +1,4 @@
-name: Build Puppet Environment
+name: Puppet Environment CI/CD
 
 on:
   push:
@@ -7,9 +7,26 @@ on:
       - qa
       - test
       - 'test_**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy (production, qa, test, or test_*)'
+        required: true
+        type: string
+        default: 'production'
+      skip_deploy:
+        description: 'Skip deployment (build only)'
+        required: false
+        type: boolean
+        default: false
 
 env:
   G10K_VERSION: '0.9.9'
+
+# Ensure only one deployment runs at a time per environment
+concurrency:
+  group: puppet-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
   build:
@@ -20,12 +37,29 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Set environment name from branch
+      - name: Generate GitHub App Token
+        id: generate-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.GH_APP_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+      - name: Configure Git credentials for private repositories
+        run: |
+          git config --global credential.helper store
+          echo "https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com" > ~/.git-credentials
+          git config --global url."https://github.com/".insteadOf "git@github.com:"
+
+      - name: Set environment name from branch or input
         id: set-env
         run: |
-          BRANCH_NAME="${GITHUB_REF#refs/heads/}"
-          echo "branch_name=${BRANCH_NAME}" >> $GITHUB_OUTPUT
-          echo "Environment: ${BRANCH_NAME}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV_NAME="${{ inputs.environment }}"
+          else
+            ENV_NAME="${GITHUB_REF#refs/heads/}"
+          fi
+          echo "branch_name=${ENV_NAME}" >> $GITHUB_OUTPUT
+          echo "Environment: ${ENV_NAME}"
 
       - name: Install g10k
         run: |
@@ -162,3 +196,158 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           tree -L 3 artifact/code/ || find artifact/code/ -maxdepth 3 -print
           echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy:
+    name: Deploy to Puppet Servers
+    runs-on: self-hosted
+    needs: build
+    # Only deploy on push to main branches, or on manual trigger if skip_deploy is false
+    if: |
+      (github.event_name == 'push' && (
+        github.ref == 'refs/heads/production' ||
+        github.ref == 'refs/heads/qa' ||
+        github.ref == 'refs/heads/test' ||
+        startsWith(github.ref, 'refs/heads/test_')
+      )) ||
+      (github.event_name == 'workflow_dispatch' && !inputs.skip_deploy)
+
+    # Use variables from the build job
+    env:
+      ENV_NAME: ${{ needs.build.outputs.environment_name }}
+
+    steps:
+      - name: Set environment variables
+        id: set-vars
+        run: |
+          # Get environment name from build job or input
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV_NAME="${{ inputs.environment }}"
+          else
+            ENV_NAME="${GITHUB_REF#refs/heads/}"
+          fi
+          echo "env_name=${ENV_NAME}" >> $GITHUB_OUTPUT
+
+          # Set target servers - always deploy to all Puppet servers
+          echo "target_servers=${{ vars.PUPPET_SERVERS || 'puppet.example.com' }}" >> $GITHUB_OUTPUT
+          echo "rsync_user=${{ vars.PUPPET_RSYNC_USER || 'root' }}" >> $GITHUB_OUTPUT
+          echo "api_port=${{ vars.PUPPET_ADMIN_API_PORT || '8140' }}" >> $GITHUB_OUTPUT
+
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: puppet-environment-${{ steps.set-vars.outputs.env_name }}-${{ github.sha }}
+          path: ./artifact
+
+      - name: Verify artifact structure
+        run: |
+          echo "Artifact structure:"
+          ls -lah artifact/
+
+          if [ -d "artifact/environments" ]; then
+            echo "Artifact contains environments directory"
+            ls -lah artifact/environments/
+          else
+            echo "Artifact is environment directory"
+          fi
+
+      - name: Deploy to Puppet servers via rsync
+        run: |
+          ENV_NAME="${{ steps.set-vars.outputs.env_name }}"
+          TARGETS="${{ steps.set-vars.outputs.target_servers }}"
+          RSYNC_USER="${{ steps.set-vars.outputs.rsync_user }}"
+
+          echo "Deploying environment '${ENV_NAME}' to servers: ${TARGETS}"
+
+          # Split comma-separated servers
+          IFS=',' read -ra SERVERS <<< "$TARGETS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | xargs) # trim whitespace
+            echo "=== Deploying to ${SERVER} ==="
+
+            # Create backup of existing environment
+            ssh ${RSYNC_USER}@${SERVER} "mkdir -p /etc/puppetlabs/code/environments-backup && \
+              if [ -d /etc/puppetlabs/code/environments/${ENV_NAME} ]; then \
+                cp -a /etc/puppetlabs/code/environments/${ENV_NAME} \
+                  /etc/puppetlabs/code/environments-backup/${ENV_NAME}-\$(date +%Y%m%d-%H%M%S); \
+              fi"
+
+            # Sync the environment
+            rsync -avz --delete-after \
+              --exclude='.git' \
+              --exclude='.g10k' \
+              artifact/environments/${ENV_NAME}/ \
+              ${RSYNC_USER}@${SERVER}:/etc/puppetlabs/code/environments/${ENV_NAME}/
+
+            echo "Deployment to ${SERVER} completed successfully"
+          done
+
+      - name: Clear Puppet environment cache
+        run: |
+          ENV_NAME="${{ steps.set-vars.outputs.env_name }}"
+          TARGETS="${{ steps.set-vars.outputs.target_servers }}"
+          RSYNC_USER="${{ steps.set-vars.outputs.rsync_user }}"
+          API_PORT="${{ steps.set-vars.outputs.api_port }}"
+
+          echo "Clearing environment cache for '${ENV_NAME}'"
+
+          # Split comma-separated servers
+          IFS=',' read -ra SERVERS <<< "$TARGETS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | xargs) # trim whitespace
+            echo "=== Clearing cache on ${SERVER} ==="
+
+            # Clear environment cache using Puppet Admin API
+            ssh ${RSYNC_USER}@${SERVER} "curl -X DELETE \
+              --cert /etc/puppetlabs/puppet/ssl/certs/\$(hostname -f).pem \
+              --key /etc/puppetlabs/puppet/ssl/private_keys/\$(hostname -f).pem \
+              --cacert /etc/puppetlabs/puppet/ssl/certs/ca.pem \
+              https://localhost:${API_PORT}/puppet-admin-api/v1/environment-cache?environment=${ENV_NAME}" || {
+                echo "Warning: Failed to clear cache on ${SERVER}"
+                echo "You may need to manually run: puppetserver reload"
+              }
+
+            echo "Cache cleared on ${SERVER}"
+          done
+
+      - name: Verify deployment
+        run: |
+          ENV_NAME="${{ steps.set-vars.outputs.env_name }}"
+          TARGETS="${{ steps.set-vars.outputs.target_servers }}"
+          RSYNC_USER="${{ steps.set-vars.outputs.rsync_user }}"
+
+          echo "Verifying deployment on all servers..."
+
+          IFS=',' read -ra SERVERS <<< "$TARGETS"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | xargs)
+            echo "=== Verifying ${SERVER} ==="
+
+            ssh ${RSYNC_USER}@${SERVER} "ls -lah /etc/puppetlabs/code/environments/${ENV_NAME}/ && \
+              echo 'Environment ${ENV_NAME} structure:' && \
+              find /etc/puppetlabs/code/environments/${ENV_NAME}/ -maxdepth 2 -type d"
+
+            echo "Verification completed for ${SERVER}"
+          done
+
+      - name: Deployment summary
+        run: |
+          ENV_NAME="${{ steps.set-vars.outputs.env_name }}"
+          TARGETS="${{ steps.set-vars.outputs.target_servers }}"
+
+          echo "### Deployment Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment:** ${ENV_NAME}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Servers:** ${TARGETS}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployed at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Actions performed" >> $GITHUB_STEP_SUMMARY
+          echo "1. Environment backed up to environments-backup/" >> $GITHUB_STEP_SUMMARY
+          echo "2. Files synced via rsync to /etc/puppetlabs/code/environments/${ENV_NAME}/" >> $GITHUB_STEP_SUMMARY
+          echo "3. Environment cache cleared via Puppet Admin API" >> $GITHUB_STEP_SUMMARY
+          echo "4. Deployment verified on all servers" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Note:** If cache clearing failed, manually run: \`puppetserver reload\`" >> $GITHUB_STEP_SUMMARY
