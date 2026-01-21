@@ -93,6 +93,7 @@ jobs:
               remote: 'https://github.com/${{ github.repository }}'
               basedir: './output/environments'
               prefix: false
+              filter_command: 'grep -E "^(production|qa|test|test_.*)$"'
 
           forge:
             baseurl: 'https://forge.puppet.com'
