@@ -42,7 +42,8 @@ The workflow consists of two jobs that run sequentially:
 .
 ├── .github/
 │   └── workflows/
-│       └── build-puppet-environment.yml    # Unified CI/CD pipeline
+│       ├── build-puppet-environment.yml    # Unified CI/CD pipeline
+│       └── deploy-eyaml-keys.yml           # eyaml keys synchronization
 ├── manifests/
 │   └── site.pp                             # Main Puppet manifest
 ├── modules/
@@ -436,6 +437,62 @@ cat /tmp/hello_world.txt
 5. **Self-Hosted Runner**: Ensure runner is in a secure network segment
 
 ## Advanced Usage
+
+### Syncing eyaml Encryption Keys
+
+When using Hiera-eyaml for encrypted secrets in Puppet, all Puppet servers need to have identical encryption keys. This workflow synchronizes the eyaml keys from a master server to all other servers.
+
+**When to use:**
+- Setting up new Puppet servers
+- Rotating eyaml keys across your infrastructure
+- Recovering from key mismatches
+
+**How it works:**
+1. Downloads keys from the **first server** in `PUPPET_SERVERS` (master)
+2. Deploys keys to **all other servers** in the list
+3. Sets correct permissions (directory: 0500, keys: 0400, owner: puppet:root)
+
+**To sync keys:**
+
+Navigate to **Actions** → **Deploy eyaml Keys** → **Run workflow**
+
+The workflow will:
+- Download from master: `/etc/puppetlabs/puppet/keys/private_key.pkcs7.pem` and `public_key.pkcs7.pem`
+- Deploy to all other servers with correct permissions
+- Verify deployment on all servers
+
+**Requirements:**
+- **At least 2 servers** configured in `PUPPET_SERVERS` (workflow will fail if only 1 server)
+- eyaml keys must exist on the first server (master)
+- SSH access to all servers (via `PUPPET_DEPLOY_SSH_KEY`)
+
+**Note:** If you only have one Puppet server, this workflow is not needed - there's nothing to sync!
+
+**Security notes:**
+- Keys are temporarily stored on the self-hosted runner during sync
+- Keys are automatically cleaned up after deployment
+- Only accessible via manual workflow dispatch
+- Concurrency control prevents parallel key syncs
+
+**Example workflow:**
+```bash
+# 1. Generate keys on master server (first in PUPPET_SERVERS list)
+ssh root@puppet1.example.com
+eyaml createkeys --pkcs7-private-key=/etc/puppetlabs/puppet/keys/private_key.pkcs7.pem \
+                 --pkcs7-public-key=/etc/puppetlabs/puppet/keys/public_key.pkcs7.pem
+
+# 2. Set permissions on master
+chown -R puppet:root /etc/puppetlabs/puppet/keys
+chmod 0500 /etc/puppetlabs/puppet/keys
+chmod 0400 /etc/puppetlabs/puppet/keys/*.pem
+
+# 3. Run "Deploy eyaml Keys" workflow in GitHub Actions
+# Keys are now synchronized to all servers
+
+# 4. Verify on any server
+ssh root@puppet2.example.com
+ls -la /etc/puppetlabs/puppet/keys/
+```
 
 ### Custom Environment Names
 

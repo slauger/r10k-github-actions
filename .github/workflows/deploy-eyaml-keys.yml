@@ -1,0 +1,227 @@
+name: Deploy eyaml Keys
+
+on:
+  workflow_dispatch:
+
+# Ensure only one key sync runs at a time
+concurrency:
+  group: puppet-eyaml-keys-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-eyaml-keys:
+    name: Sync eyaml Keys from Master to All Puppet Servers
+    runs-on: self-hosted
+
+    steps:
+      - name: Validate required variables and secrets
+        run: |
+          ERRORS=0
+
+          # Check required variables
+          if [ -z "${{ vars.PUPPET_SERVERS }}" ]; then
+            echo "❌ ERROR: PUPPET_SERVERS variable is not set"
+            echo "   Please configure it in Settings → Secrets and variables → Actions → Variables"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ PUPPET_SERVERS is configured: ${{ vars.PUPPET_SERVERS }}"
+
+            # Count servers
+            IFS=',' read -ra SERVERS <<< "${{ vars.PUPPET_SERVERS }}"
+            SERVER_COUNT=${#SERVERS[@]}
+
+            if [ $SERVER_COUNT -lt 2 ]; then
+              echo "❌ ERROR: At least 2 Puppet servers are required for key synchronization"
+              echo "   Found only $SERVER_COUNT server(s): ${{ vars.PUPPET_SERVERS }}"
+              ERRORS=$((ERRORS + 1))
+            else
+              echo "✅ Found $SERVER_COUNT Puppet servers for synchronization"
+            fi
+          fi
+
+          # Check SSH key secret
+          if [ -z "${{ secrets.PUPPET_DEPLOY_SSH_KEY }}" ]; then
+            echo "❌ ERROR: PUPPET_DEPLOY_SSH_KEY secret is not set"
+            echo "   Please configure it in Settings → Secrets and variables → Actions → Secrets"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ PUPPET_DEPLOY_SSH_KEY secret is configured"
+          fi
+
+          # Exit if there are errors
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "❌ eyaml key sync cannot proceed due to $ERRORS error(s)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All required configuration is present"
+
+      - name: Setup SSH key for deployment
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PUPPET_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Add SSH key to agent
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/deploy_key
+
+          # Configure SSH to use the key
+          cat >> ~/.ssh/config <<EOF
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/known_hosts
+          EOF
+          chmod 600 ~/.ssh/config
+
+      - name: Download eyaml keys from master server
+        id: download-keys
+        run: |
+          RSYNC_USER="${{ vars.PUPPET_RSYNC_USER || 'root' }}"
+
+          # Split server list and get first server (master)
+          IFS=',' read -ra SERVERS <<< "${{ vars.PUPPET_SERVERS }}"
+          MASTER_SERVER=$(echo "${SERVERS[0]}" | xargs)  # trim whitespace
+
+          echo "Master Puppet server: ${MASTER_SERVER}"
+          echo "master_server=${MASTER_SERVER}" >> $GITHUB_OUTPUT
+
+          # Create temporary directory for keys
+          mkdir -p /tmp/eyaml-keys
+
+          echo "Downloading eyaml keys from ${MASTER_SERVER}..."
+
+          # Download private key
+          scp ${RSYNC_USER}@${MASTER_SERVER}:/etc/puppetlabs/puppet/keys/private_key.pkcs7.pem \
+            /tmp/eyaml-keys/private_key.pkcs7.pem
+
+          # Download public key
+          scp ${RSYNC_USER}@${MASTER_SERVER}:/etc/puppetlabs/puppet/keys/public_key.pkcs7.pem \
+            /tmp/eyaml-keys/public_key.pkcs7.pem
+
+          # Verify keys were downloaded
+          if [ ! -f /tmp/eyaml-keys/private_key.pkcs7.pem ]; then
+            echo "❌ ERROR: Failed to download private_key.pkcs7.pem"
+            exit 1
+          fi
+
+          if [ ! -f /tmp/eyaml-keys/public_key.pkcs7.pem ]; then
+            echo "❌ ERROR: Failed to download public_key.pkcs7.pem"
+            exit 1
+          fi
+
+          echo "✅ Successfully downloaded eyaml keys from master server"
+
+          # Show key fingerprints for verification
+          echo ""
+          echo "Key fingerprints:"
+          echo "Private key:"
+          openssl pkcs7 -print_certs -in /tmp/eyaml-keys/private_key.pkcs7.pem 2>/dev/null | openssl x509 -noout -fingerprint 2>/dev/null || echo "  (binary key file)"
+          echo "Public key:"
+          openssl pkcs7 -print_certs -in /tmp/eyaml-keys/public_key.pkcs7.pem 2>/dev/null | openssl x509 -noout -fingerprint 2>/dev/null || echo "  (binary key file)"
+
+      - name: Deploy eyaml keys to all other Puppet servers
+        run: |
+          RSYNC_USER="${{ vars.PUPPET_RSYNC_USER || 'root' }}"
+          MASTER_SERVER="${{ steps.download-keys.outputs.master_server }}"
+
+          # Split server list and skip first server (master)
+          IFS=',' read -ra SERVERS <<< "${{ vars.PUPPET_SERVERS }}"
+
+          echo "Deploying eyaml keys to all servers except master (${MASTER_SERVER})..."
+          echo ""
+
+          DEPLOYED=0
+          for SERVER in "${SERVERS[@]:1}"; do
+            SERVER=$(echo "$SERVER" | xargs)  # trim whitespace
+            echo "=== Deploying to ${SERVER} ==="
+
+            # Create keys directory with correct permissions
+            ssh ${RSYNC_USER}@${SERVER} "mkdir -p /etc/puppetlabs/puppet/keys/ && \
+              chown puppet:root /etc/puppetlabs/puppet/keys && \
+              chmod 0500 /etc/puppetlabs/puppet/keys"
+
+            # Upload private key
+            scp /tmp/eyaml-keys/private_key.pkcs7.pem \
+              ${RSYNC_USER}@${SERVER}:/etc/puppetlabs/puppet/keys/private_key.pkcs7.pem
+
+            # Upload public key
+            scp /tmp/eyaml-keys/public_key.pkcs7.pem \
+              ${RSYNC_USER}@${SERVER}:/etc/puppetlabs/puppet/keys/public_key.pkcs7.pem
+
+            # Set correct ownership and permissions on keys
+            ssh ${RSYNC_USER}@${SERVER} "chown puppet:root /etc/puppetlabs/puppet/keys/private_key.pkcs7.pem && \
+              chown puppet:root /etc/puppetlabs/puppet/keys/public_key.pkcs7.pem && \
+              chmod 0400 /etc/puppetlabs/puppet/keys/private_key.pkcs7.pem && \
+              chmod 0400 /etc/puppetlabs/puppet/keys/public_key.pkcs7.pem"
+
+            echo "✅ Successfully deployed keys to ${SERVER}"
+            echo ""
+            DEPLOYED=$((DEPLOYED + 1))
+          done
+
+          echo "=== Deployment Summary ==="
+          echo "Keys synchronized to ${DEPLOYED} server(s)"
+
+      - name: Cleanup temporary keys
+        if: always()
+        run: |
+          echo "Cleaning up temporary key files..."
+          rm -rf /tmp/eyaml-keys
+          echo "✅ Cleanup complete"
+
+      - name: Verify key deployment
+        run: |
+          RSYNC_USER="${{ vars.PUPPET_RSYNC_USER || 'root' }}"
+          MASTER_SERVER="${{ steps.download-keys.outputs.master_server }}"
+
+          echo "Verifying eyaml key deployment on all servers..."
+          echo ""
+
+          IFS=',' read -ra SERVERS <<< "${{ vars.PUPPET_SERVERS }}"
+
+          for SERVER in "${SERVERS[@]}"; do
+            SERVER=$(echo "$SERVER" | xargs)
+
+            if [ "$SERVER" = "$MASTER_SERVER" ]; then
+              echo "=== ${SERVER} (master) ==="
+            else
+              echo "=== ${SERVER} ==="
+            fi
+
+            ssh ${RSYNC_USER}@${SERVER} "ls -lah /etc/puppetlabs/puppet/keys/ && \
+              echo 'Permissions verified:' && \
+              stat -c 'Directory: %a %U:%G' /etc/puppetlabs/puppet/keys/ && \
+              stat -c 'Private key: %a %U:%G %n' /etc/puppetlabs/puppet/keys/private_key.pkcs7.pem && \
+              stat -c 'Public key: %a %U:%G %n' /etc/puppetlabs/puppet/keys/public_key.pkcs7.pem" || {
+                echo "⚠️  Warning: Could not verify keys on ${SERVER}"
+              }
+
+            echo ""
+          done
+
+      - name: Deployment summary
+        run: |
+          IFS=',' read -ra SERVERS <<< "${{ vars.PUPPET_SERVERS }}"
+          SERVER_COUNT=${#SERVERS[@]}
+          TARGET_COUNT=$((SERVER_COUNT - 1))
+          MASTER_SERVER="${{ steps.download-keys.outputs.master_server }}"
+
+          echo "### eyaml Keys Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Master Server:** ${MASTER_SERVER}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target Servers:** ${TARGET_COUNT}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total Servers:** ${SERVER_COUNT}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Synced at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Keys synchronized" >> $GITHUB_STEP_SUMMARY
+          echo "- \`/etc/puppetlabs/puppet/keys/private_key.pkcs7.pem\` (0400 puppet:root)" >> $GITHUB_STEP_SUMMARY
+          echo "- \`/etc/puppetlabs/puppet/keys/public_key.pkcs7.pem\` (0400 puppet:root)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "#### Directory permissions" >> $GITHUB_STEP_SUMMARY
+          echo "- \`/etc/puppetlabs/puppet/keys/\` (0500 puppet:root)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> **Note:** All Puppet servers now have identical eyaml encryption keys" >> $GITHUB_STEP_SUMMARY
