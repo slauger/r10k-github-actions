@@ -80,42 +80,18 @@ jobs:
           sudo mv g10k /usr/local/bin/
           g10k -version
 
-      - name: Create output directory structure
+      - name: Run g10k to fetch all environments and modules
         run: |
           ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
-          mkdir -p output/environments/${ENV_NAME}
-          echo "Created directory structure for environment: ${ENV_NAME}"
 
-      - name: Copy environment files
-        run: |
-          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
-          ENV_DIR="output/environments/${ENV_NAME}"
-
-          # Copy all files except CI/CD and generated directories
-          rsync -av \
-            --exclude='.git/' \
-            --exclude='.github/' \
-            --exclude='.g10k/' \
-            --exclude='output/' \
-            --exclude='artifact/' \
-            ./ ${ENV_DIR}/
-
-          echo "Environment files copied to ${ENV_DIR}"
-          echo "Contents:"
-          ls -la ${ENV_DIR}/
-
-      - name: Create g10k config for this environment
-        run: |
-          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
-          cat > g10k-run.yaml <<EOF
+          # Create g10k config that uses the GitHub repository
+          cat > g10k.yaml <<EOF
           cachedir: '.g10k/cache'
-
-          git:
-            privatekey: ''
 
           sources:
             puppet:
-              basedir: './output/environments/${ENV_NAME}'
+              remote: 'https://github.com/${{ github.repository }}'
+              basedir: './output/environments'
               prefix: false
 
           forge:
@@ -128,60 +104,21 @@ jobs:
           use_cache: true
           EOF
 
-          cat g10k-run.yaml
-
-      - name: Run g10k to fetch Puppet modules
-        run: |
-          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
-          ENV_DIR="./output/environments/${ENV_NAME}"
-
-          # Verify Puppetfile exists
-          if [ ! -f "${ENV_DIR}/Puppetfile" ]; then
-            echo "ERROR: Puppetfile not found at ${ENV_DIR}/Puppetfile"
-            exit 1
-          fi
-
-          echo "Found Puppetfile at ${ENV_DIR}/Puppetfile"
-          echo "Puppetfile contents:"
-          cat "${ENV_DIR}/Puppetfile"
+          cat g10k.yaml
           echo ""
+          echo "Running g10k to fetch all environments and modules from Puppetfile..."
 
-          # Create g10k config that uses the GitHub repository
-          cat > g10k-puppetfile.yaml <<EOF
-          cachedir: '.g10k/cache'
-
-          sources:
-            puppet:
-              remote: 'https://github.com/${{ github.repository }}'
-              basedir: './output/environments'
-
-          forge:
-            baseurl: 'https://forge.puppet.com'
-
-          maxworker: 50
-          use_cache: true
-          EOF
-
-          cat g10k-puppetfile.yaml
-          echo ""
-          echo "Running g10k to fetch modules from Puppetfile..."
-
-          # Run g10k with explicit environment specification
-          # Format: <source>_<environment>, e.g., puppet_production
-          g10k -config g10k-puppetfile.yaml -environment puppet_${ENV_NAME} -verbose
+          # Run g10k without -environment flag to checkout all branches
+          g10k -config g10k.yaml -verbose
 
           echo ""
-          echo "Modules fetched successfully"
+          echo "Environments fetched successfully"
           echo ""
-          echo "Checking for forge directory with installed modules:"
-          ls -lah output/environments/${ENV_NAME}/forge/ 2>/dev/null || echo "No forge directory found - check if Puppetfile has modules"
-
-          if [ -d "${ENV_DIR}/forge" ]; then
-            echo "Modules successfully fetched:"
-            ls -la "${ENV_DIR}/forge/"
-          else
-            echo "WARNING: No forge directory created - check if Puppetfile has modules"
-          fi
+          echo "Available environments:"
+          ls -la output/environments/
+          echo ""
+          echo "Modules in ${ENV_NAME}/forge directory:"
+          ls -lah output/environments/${ENV_NAME}/forge/ 2>/dev/null || echo "No forge directory found"
 
       - name: List generated environment structure
         run: |
