@@ -97,8 +97,13 @@ jobs:
           # Copy manifests
           cp -r manifests ${ENV_DIR}/
 
-          # Copy local modules
-          cp -r modules ${ENV_DIR}/
+          # Copy local modules (if they exist)
+          if [ -d "modules" ]; then
+            cp -r modules ${ENV_DIR}/
+            echo "Custom modules copied"
+          else
+            echo "No custom modules directory found (optional)"
+          fi
 
           echo "Environment files copied to ${ENV_DIR}"
 
