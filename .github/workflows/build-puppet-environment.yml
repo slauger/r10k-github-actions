@@ -67,9 +67,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: .g10k/cache
-          key: g10k-cache-${{ github.ref_name }}-${{ github.run_number }}
+          key: g10k-cache-${{ github.ref_name }}
           restore-keys: |
-            g10k-cache-${{ github.ref_name }}-
             g10k-cache-
 
       - name: Install g10k
