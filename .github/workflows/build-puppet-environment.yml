@@ -146,13 +146,13 @@ jobs:
           cat "${ENV_DIR}/Puppetfile"
           echo ""
 
-          # Create g10k config that uses the environment directory
+          # Create g10k config that uses the GitHub repository
           cat > g10k-puppetfile.yaml <<EOF
           cachedir: '.g10k/cache'
 
           sources:
             puppet:
-              remote: 'file://.'
+              remote: 'https://github.com/${{ github.repository }}'
               basedir: './output/environments'
 
           forge:
