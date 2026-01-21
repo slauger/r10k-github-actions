@@ -166,12 +166,15 @@ jobs:
           echo ""
           echo "Running g10k to fetch modules from Puppetfile..."
 
-          # Run g10k - it will automatically find Puppetfile in each environment
-          g10k -config g10k-puppetfile.yaml -verbose
+          # Run g10k with explicit environment specification
+          # Format: <source>_<environment>, e.g., puppet_production
+          g10k -config g10k-puppetfile.yaml -environment puppet_${ENV_NAME} -verbose
 
           echo ""
-          echo "Checking for forge directory..."
-          ls -la "${ENV_DIR}/" || true
+          echo "Modules fetched successfully"
+          echo ""
+          echo "Checking for forge directory with installed modules:"
+          ls -lah output/environments/${ENV_NAME}/forge/ 2>/dev/null || echo "No forge directory found - check if Puppetfile has modules"
 
           if [ -d "${ENV_DIR}/forge" ]; then
             echo "Modules successfully fetched:"
