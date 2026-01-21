@@ -144,7 +144,7 @@ jobs:
               basedir: './output/environments'
               environments:
                 ${ENV_NAME}:
-                  puppetfile: './Puppetfile'
+                  puppetfile: './output/environments/${ENV_NAME}/Puppetfile'
 
           forge:
             baseurl: 'https://forge.puppet.com'
@@ -153,9 +153,14 @@ jobs:
           use_cache: true
           EOF
 
+          cat g10k-puppetfile.yaml
+          echo ""
+          echo "Running g10k to fetch modules from Puppetfile..."
+
           # Run g10k
           g10k -config g10k-puppetfile.yaml -verbose
 
+          echo ""
           echo "Modules fetched successfully"
 
       - name: List generated environment structure
