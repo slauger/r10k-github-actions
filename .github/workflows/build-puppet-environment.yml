@@ -63,6 +63,14 @@ jobs:
           echo "branch_name=${ENV_NAME}" >> $GITHUB_OUTPUT
           echo "Environment: ${ENV_NAME}"
 
+      - name: Cache g10k modules
+        uses: actions/cache@v4
+        with:
+          path: .g10k/cache
+          key: g10k-cache-${{ hashFiles('Puppetfile') }}
+          restore-keys: |
+            g10k-cache-
+
       - name: Install g10k
         run: |
           echo "Installing g10k version ${G10K_VERSION}"
