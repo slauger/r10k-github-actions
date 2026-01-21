@@ -37,14 +37,42 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Validate GitHub App secrets for private modules
+        if: secrets.GH_APP_ID != '' || secrets.GH_APP_PRIVATE_KEY != ''
+        run: |
+          ERRORS=0
+
+          if [ -z "${{ secrets.GH_APP_ID }}" ]; then
+            echo "❌ ERROR: GH_APP_ID is set but empty"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ GH_APP_ID is configured"
+          fi
+
+          if [ -z "${{ secrets.GH_APP_PRIVATE_KEY }}" ]; then
+            echo "❌ ERROR: GH_APP_PRIVATE_KEY is set but empty"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ GH_APP_PRIVATE_KEY is configured"
+          fi
+
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "❌ GitHub App configuration is incomplete"
+            echo "   Please configure both GH_APP_ID and GH_APP_PRIVATE_KEY"
+            exit 1
+          fi
+
       - name: Generate GitHub App Token
         id: generate-token
+        if: secrets.GH_APP_ID != '' && secrets.GH_APP_PRIVATE_KEY != ''
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
       - name: Configure Git credentials for private repositories
+        if: steps.generate-token.outputs.token != ''
         run: |
           git config --global credential.helper store
           echo "https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com" > ~/.git-credentials
@@ -216,6 +244,52 @@ jobs:
       ENV_NAME: ${{ needs.build.outputs.environment_name }}
 
     steps:
+      - name: Validate required variables and secrets
+        run: |
+          ERRORS=0
+
+          # Check required variables
+          if [ -z "${{ vars.PUPPET_SERVERS }}" ]; then
+            echo "❌ ERROR: PUPPET_SERVERS variable is not set"
+            echo "   Please configure it in Settings → Secrets and variables → Actions → Variables"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ PUPPET_SERVERS is configured: ${{ vars.PUPPET_SERVERS }}"
+          fi
+
+          # Check optional variables
+          if [ -z "${{ vars.PUPPET_RSYNC_USER }}" ]; then
+            echo "⚠️  WARNING: PUPPET_RSYNC_USER not set, using default 'root'"
+          else
+            echo "✅ PUPPET_RSYNC_USER is configured: ${{ vars.PUPPET_RSYNC_USER }}"
+          fi
+
+          if [ -z "${{ vars.PUPPET_ADMIN_API_PORT }}" ]; then
+            echo "⚠️  WARNING: PUPPET_ADMIN_API_PORT not set, using default '8140'"
+          else
+            echo "✅ PUPPET_ADMIN_API_PORT is configured: ${{ vars.PUPPET_ADMIN_API_PORT }}"
+          fi
+
+          # Check SSH key secret
+          if [ -z "${{ secrets.PUPPET_DEPLOY_SSH_KEY }}" ]; then
+            echo "❌ ERROR: PUPPET_DEPLOY_SSH_KEY secret is not set"
+            echo "   Please configure it in Settings → Secrets and variables → Actions → Secrets"
+            echo "   Or ensure your self-hosted runner has SSH keys configured"
+            ERRORS=$((ERRORS + 1))
+          else
+            echo "✅ PUPPET_DEPLOY_SSH_KEY secret is configured"
+          fi
+
+          # Exit if there are errors
+          if [ $ERRORS -gt 0 ]; then
+            echo ""
+            echo "❌ Deployment cannot proceed due to $ERRORS error(s)"
+            exit 1
+          fi
+
+          echo ""
+          echo "✅ All required configuration is present"
+
       - name: Setup SSH key for deployment
         run: |
           mkdir -p ~/.ssh
