@@ -143,6 +143,7 @@ jobs:
 
           sources:
             puppet:
+              remote: 'file://.'
               basedir: './output/environments'
               environments:
                 ${ENV_NAME}:
@@ -152,6 +153,7 @@ jobs:
             baseurl: 'https://forge.puppet.com'
 
           maxworker: 50
+          use_cache: true
           EOF
 
           # Run g10k
