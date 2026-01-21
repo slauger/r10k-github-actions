@@ -125,8 +125,12 @@ If you need to access private Puppet modules from your GitHub organization, you 
 
 Add the following secrets to this repository (Settings → Secrets and variables → Actions):
 
+**For GitHub App (private modules):**
 - **`GH_APP_ID`**: The App ID (found on the app's settings page)
 - **`GH_APP_PRIVATE_KEY`**: Content of the `.pem` file (entire content including headers)
+
+**For SSH deployment:**
+- **`PUPPET_DEPLOY_SSH_KEY`**: SSH private key for accessing Puppet servers (see SSH setup below)
 
 #### 5. Update Puppetfile
 
@@ -145,6 +149,60 @@ mod "stdlib",
 ```
 
 **Note**: The workflow automatically converts SSH URLs to HTTPS, so both formats work for public repositories.
+
+### SSH Key Setup for Deployment
+
+The deploy job needs SSH access to your Puppet servers. Choose one of the following approaches:
+
+#### Option 1: SSH Key on Self-Hosted Runner (Recommended)
+
+Install the SSH key directly on your self-hosted runner:
+
+```bash
+# On the self-hosted runner machine:
+# Generate SSH key
+ssh-keygen -t ed25519 -C "github-actions-puppet-deploy" -f ~/.ssh/puppet_deploy -N ""
+
+# Copy public key to all Puppet servers
+ssh-copy-id -i ~/.ssh/puppet_deploy.pub root@puppet1.example.com
+ssh-copy-id -i ~/.ssh/puppet_deploy.pub root@puppet2.example.com
+
+# Add to SSH config for automatic use
+cat >> ~/.ssh/config <<EOF
+Host puppet*.example.com
+    IdentityFile ~/.ssh/puppet_deploy
+    StrictHostKeyChecking accept-new
+EOF
+```
+
+**With this approach, you can remove the "Setup SSH key" step from the workflow** as the runner already has the key configured.
+
+#### Option 2: SSH Key as GitHub Secret (More Flexible)
+
+Store the SSH private key as a GitHub Secret (already configured in the workflow):
+
+```bash
+# Generate SSH key locally
+ssh-keygen -t ed25519 -C "github-actions-puppet-deploy" -f puppet_deploy -N ""
+
+# Copy public key to all Puppet servers
+ssh-copy-id -i puppet_deploy.pub root@puppet1.example.com
+ssh-copy-id -i puppet_deploy.pub root@puppet2.example.com
+
+# Copy private key content to GitHub Secret
+cat puppet_deploy  # Copy this entire output to PUPPET_DEPLOY_SSH_KEY secret
+```
+
+Then add the secret:
+- Go to repository Settings → Secrets and variables → Actions → Secrets
+- Click "New repository secret"
+- Name: `PUPPET_DEPLOY_SSH_KEY`
+- Value: Paste the entire private key content (including `-----BEGIN OPENSSH PRIVATE KEY-----` headers)
+
+**Advantages of Option 2:**
+- Key can be rotated via GitHub UI
+- Works across multiple self-hosted runners
+- Easier to audit and manage centrally
 
 ## Usage
 
@@ -325,7 +383,11 @@ cat /tmp/hello_world.txt
 
 ## Security Considerations
 
-1. **SSH Keys**: Use dedicated SSH keys for deployment, not personal keys
+1. **SSH Keys**: Use dedicated SSH keys for deployment
+   - Generate a dedicated key pair specifically for GitHub Actions deployments
+   - Do NOT use personal SSH keys
+   - Restrict key to specific commands if possible (using `authorized_keys` restrictions)
+   - Rotate keys regularly
 2. **GitHub App**: Use a dedicated GitHub App for module access
    - App tokens are automatically scoped and time-limited
    - More secure than using personal access tokens (PATs)

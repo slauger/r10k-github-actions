@@ -216,6 +216,25 @@ jobs:
       ENV_NAME: ${{ needs.build.outputs.environment_name }}
 
     steps:
+      - name: Setup SSH key for deployment
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PUPPET_DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+
+          # Add SSH key to agent
+          eval "$(ssh-agent -s)"
+          ssh-add ~/.ssh/deploy_key
+
+          # Configure SSH to use the key
+          cat >> ~/.ssh/config <<EOF
+          Host *
+            IdentityFile ~/.ssh/deploy_key
+            StrictHostKeyChecking accept-new
+            UserKnownHostsFile ~/.ssh/known_hosts
+          EOF
+          chmod 600 ~/.ssh/config
+
       - name: Set environment variables
         id: set-vars
         run: |
