@@ -133,8 +133,20 @@ jobs:
       - name: Run g10k to fetch Puppet modules
         run: |
           ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          ENV_DIR="./output/environments/${ENV_NAME}"
 
-          # Create a temporary Puppetfile config for g10k
+          # Verify Puppetfile exists
+          if [ ! -f "${ENV_DIR}/Puppetfile" ]; then
+            echo "ERROR: Puppetfile not found at ${ENV_DIR}/Puppetfile"
+            exit 1
+          fi
+
+          echo "Found Puppetfile at ${ENV_DIR}/Puppetfile"
+          echo "Puppetfile contents:"
+          cat "${ENV_DIR}/Puppetfile"
+          echo ""
+
+          # Create g10k config that uses the environment directory
           cat > g10k-puppetfile.yaml <<EOF
           cachedir: '.g10k/cache'
 
@@ -142,9 +154,6 @@ jobs:
             puppet:
               remote: 'file://.'
               basedir: './output/environments'
-              environments:
-                ${ENV_NAME}:
-                  puppetfile: './output/environments/${ENV_NAME}/Puppetfile'
 
           forge:
             baseurl: 'https://forge.puppet.com'
@@ -157,11 +166,19 @@ jobs:
           echo ""
           echo "Running g10k to fetch modules from Puppetfile..."
 
-          # Run g10k
+          # Run g10k - it will automatically find Puppetfile in each environment
           g10k -config g10k-puppetfile.yaml -verbose
 
           echo ""
-          echo "Modules fetched successfully"
+          echo "Checking for forge directory..."
+          ls -la "${ENV_DIR}/" || true
+
+          if [ -d "${ENV_DIR}/forge" ]; then
+            echo "Modules successfully fetched:"
+            ls -la "${ENV_DIR}/forge/"
+          else
+            echo "WARNING: No forge directory created - check if Puppetfile has modules"
+          fi
 
       - name: List generated environment structure
         run: |
