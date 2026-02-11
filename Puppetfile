@@ -55,5 +55,6 @@ mod "accounts",
   :tag => "v8.1.0"
 
 mod "helloworld",
-  :git => "https://github.com/slauger/private-puppet-module"
+  :git => "https://github.com/slauger/private-puppet-module",
+  :branch => "main"
 
