@@ -47,11 +47,9 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
-          # Configure git credential helper for shellout provider
-          git config --global credential.helper store
-          echo "https://x-access-token:${GH_TOKEN}@github.com" > ~/.git-credentials
-          chmod 600 ~/.git-credentials
-          echo "Git credentials configured for private repository access"
+          # Use url.insteadOf to inject token into all GitHub HTTPS URLs
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "Git URL rewriting configured for private repository access"
 
       - name: Set environment name from branch or input
         id: set-env
