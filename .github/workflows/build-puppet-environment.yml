@@ -19,10 +19,12 @@ on:
         required: false
         type: boolean
         default: false
+  repository_dispatch:
+    types: [puppet-module-updated]
 
 # Ensure only one deployment runs at a time per environment
 concurrency:
-  group: puppet-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
+  group: puppet-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.event_name == 'repository_dispatch' && github.event.client_payload.environment || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -31,8 +33,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Set environment name
+        id: set-env
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ENV_NAME="${{ inputs.environment }}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            ENV_NAME="${{ github.event.client_payload.environment }}"
+            echo "Triggered by module: ${{ github.event.client_payload.module }}"
+            echo "Module commit: ${{ github.event.client_payload.sha }}"
+            echo "Triggered by: ${{ github.event.client_payload.triggered_by }}"
+          else
+            ENV_NAME="${GITHUB_REF#refs/heads/}"
+          fi
+          echo "branch_name=${ENV_NAME}" >> $GITHUB_OUTPUT
+          echo "Environment: ${ENV_NAME}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.set-env.outputs.branch_name }}
 
       - name: Generate GitHub App Token
         id: generate-token
@@ -51,17 +71,6 @@ jobs:
           # Use url.insteadOf to inject token into all GitHub HTTPS URLs
           git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "Git URL rewriting configured for private repository access"
-
-      - name: Set environment name from branch or input
-        id: set-env
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            ENV_NAME="${{ inputs.environment }}"
-          else
-            ENV_NAME="${GITHUB_REF#refs/heads/}"
-          fi
-          echo "branch_name=${ENV_NAME}" >> $GITHUB_OUTPUT
-          echo "Environment: ${ENV_NAME}"
 
       - name: Cache r10k modules
         uses: actions/cache@v4
@@ -211,7 +220,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: puppet-environment-${{ steps.set-env.outputs.branch_name }}-${{ github.sha }}
+          name: puppet-environment-${{ steps.set-env.outputs.branch_name }}-${{ github.run_id }}
           path: artifact/code/
           retention-days: 30
           compression-level: 9
@@ -223,7 +232,10 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${ENV_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "- **Commit:** ${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "- **Triggered by module:** ${{ github.event.client_payload.module }}" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### Environment Structure" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -234,7 +246,7 @@ jobs:
     name: Deploy to Puppet Servers
     runs-on: self-hosted
     needs: build
-    # Only deploy on push to main branches, or on manual trigger if skip_deploy is false
+    # Deploy on push, repository_dispatch (module update), or manual trigger if skip_deploy is false
     if: |
       (github.event_name == 'push' && (
         github.ref == 'refs/heads/production' ||
@@ -242,11 +254,8 @@ jobs:
         github.ref == 'refs/heads/test' ||
         startsWith(github.ref, 'refs/heads/test_')
       )) ||
-      (github.event_name == 'workflow_dispatch' && !inputs.skip_deploy)
-
-    # Use variables from the build job
-    env:
-      ENV_NAME: ${{ needs.build.outputs.environment_name }}
+      (github.event_name == 'workflow_dispatch' && !inputs.skip_deploy) ||
+      github.event_name == 'repository_dispatch'
 
     steps:
       - name: Validate required variables and secrets
@@ -317,9 +326,10 @@ jobs:
       - name: Set environment variables
         id: set-vars
         run: |
-          # Get environment name from build job or input
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ENV_NAME="${{ inputs.environment }}"
+          elif [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            ENV_NAME="${{ github.event.client_payload.environment }}"
           else
             ENV_NAME="${GITHUB_REF#refs/heads/}"
           fi
@@ -333,7 +343,7 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: puppet-environment-${{ steps.set-vars.outputs.env_name }}-${{ github.sha }}
+          name: puppet-environment-${{ steps.set-vars.outputs.env_name }}-${{ github.run_id }}
           path: ./artifact
 
       - name: Verify artifact structure
@@ -439,8 +449,11 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- **Environment:** ${ENV_NAME}" >> $GITHUB_STEP_SUMMARY
           echo "- **Target Servers:** ${TARGETS}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${GITHUB_SHA}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Artifact:** puppet-environment-${ENV_NAME}-${{ github.run_id }}" >> $GITHUB_STEP_SUMMARY
           echo "- **Deployed at:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "- **Triggered by module:** ${{ github.event.client_payload.module }}" >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "#### Actions performed" >> $GITHUB_STEP_SUMMARY
           echo "1. Environment backed up to environments-backup/" >> $GITHUB_STEP_SUMMARY

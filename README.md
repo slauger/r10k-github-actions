@@ -43,7 +43,8 @@ The workflow consists of two jobs that run sequentially:
 ├── .github/
 │   └── workflows/
 │       ├── build-puppet-environment.yml    # Unified CI/CD pipeline
-│       └── deploy-eyaml-keys.yml           # eyaml keys synchronization
+│       ├── deploy-eyaml-keys.yml           # eyaml keys synchronization
+│       └── notify-module-update.yml        # Reusable workflow for module triggers
 ├── manifests/
 │   └── site.pp                             # Main Puppet manifest
 ├── modules/
@@ -436,6 +437,73 @@ cat /tmp/hello_world.txt
 5. **Self-Hosted Runner**: Ensure runner is in a secure network segment
 
 ## Advanced Usage
+
+### Automatic Pipeline Trigger from Puppet Modules
+
+When you update a private Puppet module, you can automatically trigger the r10k pipeline to rebuild and deploy the environment. This repository provides a reusable workflow that Puppet modules can call.
+
+#### How It Works
+
+1. A commit is pushed to your private Puppet module repository
+2. The module's workflow calls the reusable workflow in this repository
+3. The reusable workflow sends a `repository_dispatch` event to trigger the r10k pipeline
+4. The r10k pipeline rebuilds the environment with the updated module
+
+#### Setup in Puppet Module Repository
+
+**1. Add the required secrets to your Puppet module repository:**
+
+Go to your Puppet module repository → Settings → Secrets and variables → Actions → Secrets:
+
+- **`GH_APP_ID`**: The GitHub App ID (same as used in this repository)
+- **`GH_APP_PRIVATE_KEY`**: The GitHub App private key (same as used in this repository)
+
+> **Note:** You can also configure these secrets at the organization level to share them across all Puppet module repositories.
+
+**2. Create the workflow file in your Puppet module:**
+
+Create `.github/workflows/notify-r10k.yml`:
+
+```yaml
+name: Notify r10k Pipeline
+
+on:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  notify:
+    uses: slauger/r10k-github-actions/.github/workflows/notify-module-update.yml@production
+    with:
+      # Optional: Override target repository (default: slauger/r10k-github-actions)
+      # target_repo: 'your-org/r10k-github-actions'
+
+      # Optional: Override environment (default: production)
+      # environment: 'qa'
+    secrets:
+      GH_APP_ID: ${{ secrets.GH_APP_ID }}
+      GH_APP_PRIVATE_KEY: ${{ secrets.GH_APP_PRIVATE_KEY }}
+```
+
+> **Important:** `secrets: inherit` does not work with reusable workflows from other repositories. You must pass the secrets explicitly.
+
+#### Workflow Parameters
+
+| Parameter | Required | Default | Description |
+|-----------|----------|---------|-------------|
+| `target_repo` | No | `slauger/r10k-github-actions` | The r10k repository to trigger |
+| `environment` | No | `production` | The environment to build and deploy |
+
+> **Note:** Currently, r10k rebuilds and deploys all branches regardless of which environment is triggered. A single trigger is sufficient.
+
+#### GitHub App Permissions
+
+The GitHub App used for authentication needs `contents: write` permission on the r10k-github-actions repository to send `repository_dispatch` events. Ensure the app is installed on both:
+
+- The Puppet module repository (to generate the token)
+- The r10k-github-actions repository (to receive the dispatch event)
 
 ### Syncing eyaml Encryption Keys
 
