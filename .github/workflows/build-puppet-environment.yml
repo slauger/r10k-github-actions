@@ -56,7 +56,7 @@ jobs:
       - name: Cache r10k modules
         uses: actions/cache@v4
         with:
-          path: ~/.r10k/cache
+          path: /home/runner/.r10k/cache
           key: r10k-cache-${{ hashFiles('**/Puppetfile') }}
           restore-keys: |
             r10k-cache-
@@ -97,38 +97,40 @@ jobs:
           GH_TOKEN: ${{ steps.generate-token.outputs.token }}
         run: |
           # Write token to file for r10k (r10k reads token from file, not env var)
-          mkdir -p ~/.r10k
-          echo "${GH_TOKEN}" > ~/.r10k/github-token
-          chmod 600 ~/.r10k/github-token
+          mkdir -p ${HOME}/.r10k
+          echo "${GH_TOKEN}" > ${HOME}/.r10k/github-token
+          chmod 600 ${HOME}/.r10k/github-token
 
           # Create r10k.yaml with oauth_token configuration
-          cat > ~/.r10k/r10k.yaml <<EOF
-          cachedir: ~/.r10k/cache
+          # Note: Must use absolute paths, r10k doesn't expand ~
+          cat > ${HOME}/.r10k/r10k.yaml <<EOF
+          cachedir: ${HOME}/.r10k/cache
 
           git:
-            oauth_token: ~/.r10k/github-token
+            oauth_token: ${HOME}/.r10k/github-token
 
           forge:
             baseurl: https://forge.puppet.com
           EOF
 
           echo "r10k configuration created with GitHub App token"
-          cat ~/.r10k/r10k.yaml
+          cat ${HOME}/.r10k/r10k.yaml
 
       - name: Setup r10k configuration fallback (GITHUB_TOKEN)
         if: steps.generate-token.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p ~/.r10k
-          echo "${GH_TOKEN}" > ~/.r10k/github-token
-          chmod 600 ~/.r10k/github-token
+          mkdir -p ${HOME}/.r10k
+          echo "${GH_TOKEN}" > ${HOME}/.r10k/github-token
+          chmod 600 ${HOME}/.r10k/github-token
 
-          cat > ~/.r10k/r10k.yaml <<EOF
-          cachedir: ~/.r10k/cache
+          # Note: Must use absolute paths, r10k doesn't expand ~
+          cat > ${HOME}/.r10k/r10k.yaml <<EOF
+          cachedir: ${HOME}/.r10k/cache
 
           git:
-            oauth_token: ~/.r10k/github-token
+            oauth_token: ${HOME}/.r10k/github-token
 
           forge:
             baseurl: https://forge.puppet.com
@@ -157,7 +159,7 @@ jobs:
 
           # Run r10k puppetfile install with config
           echo "Running r10k puppetfile install..."
-          r10k puppetfile install --verbose --moduledir=./forge --config ~/.r10k/r10k.yaml
+          r10k puppetfile install --verbose --moduledir=./forge --config ${HOME}/.r10k/r10k.yaml
 
           echo ""
           echo "Modules installed successfully"
