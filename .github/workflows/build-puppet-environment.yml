@@ -42,6 +42,17 @@ jobs:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
+      - name: Configure Git credentials for private repositories
+        if: steps.generate-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          # Configure git credential helper for shellout provider
+          git config --global credential.helper store
+          echo "https://x-access-token:${GH_TOKEN}@github.com" > ~/.git-credentials
+          chmod 600 ~/.git-credentials
+          echo "Git credentials configured for private repository access"
+
       - name: Set environment name from branch or input
         id: set-env
         run: |
