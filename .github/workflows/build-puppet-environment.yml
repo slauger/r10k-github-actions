@@ -20,9 +20,6 @@ on:
         type: boolean
         default: false
 
-env:
-  G10K_VERSION: '0.9.9'
-
 # Ensure only one deployment runs at a time per environment
 concurrency:
   group: puppet-${{ github.event_name == 'workflow_dispatch' && inputs.environment || github.ref_name }}
@@ -30,7 +27,7 @@ concurrency:
 
 jobs:
   build:
-    name: Build Puppet Environment with g10k
+    name: Build Puppet Environment with r10k
     runs-on: ubuntu-latest
 
     steps:
@@ -45,13 +42,6 @@ jobs:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
 
-      - name: Configure Git credentials for private repositories
-        if: steps.generate-token.outcome == 'success'
-        run: |
-          git config --global credential.helper store
-          echo "https://x-access-token:${{ steps.generate-token.outputs.token }}@github.com" > ~/.git-credentials
-          git config --global url."https://github.com/".insteadOf "git@github.com:"
-
       - name: Set environment name from branch or input
         id: set-env
         run: |
@@ -63,63 +53,117 @@ jobs:
           echo "branch_name=${ENV_NAME}" >> $GITHUB_OUTPUT
           echo "Environment: ${ENV_NAME}"
 
-      - name: Cache g10k modules
+      - name: Cache r10k modules
         uses: actions/cache@v4
         with:
-          path: .g10k/cache
-          key: g10k-cache-${{ github.run_id }}
+          path: ~/.r10k/cache
+          key: r10k-cache-${{ hashFiles('**/Puppetfile') }}
           restore-keys: |
-            g10k-cache-
+            r10k-cache-
 
-      - name: Install g10k
+      - name: Install r10k
         run: |
-          echo "Installing g10k version ${G10K_VERSION}"
-          wget -q https://github.com/xorpaul/g10k/releases/download/v${G10K_VERSION}/g10k-linux-amd64.zip
-          unzip -q g10k-linux-amd64.zip
-          chmod +x g10k
-          sudo mv g10k /usr/local/bin/
-          g10k -version
+          echo "Installing r10k for Puppetfile module installation"
+          sudo gem install r10k --no-document
+          r10k version
 
-      - name: Run g10k to fetch all environments and modules
+      - name: Create output directory structure
         run: |
           ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          mkdir -p output/environments/${ENV_NAME}
+          echo "Created directory structure for environment: ${ENV_NAME}"
 
-          # Create g10k config that uses the GitHub repository
-          cat > g10k.yaml <<EOF
-          cachedir: '.g10k/cache'
+      - name: Copy environment files
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          ENV_DIR="output/environments/${ENV_NAME}"
 
-          sources:
-            puppet:
-              remote: 'https://github.com/${{ github.repository }}'
-              basedir: './output/environments'
-              prefix: false
-              filter_regex: '^(production|qa|test|test_.*)$'
+          # Copy all files except CI/CD and generated directories
+          rsync -av \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.r10k/' \
+            --exclude='output/' \
+            --exclude='artifact/' \
+            ./ ${ENV_DIR}/
+
+          echo "Environment files copied to ${ENV_DIR}"
+          echo "Contents:"
+          ls -la ${ENV_DIR}/
+
+      - name: Setup r10k configuration with authentication
+        if: steps.generate-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.generate-token.outputs.token }}
+        run: |
+          # Write token to file for r10k (r10k reads token from file, not env var)
+          mkdir -p ~/.r10k
+          echo "${GH_TOKEN}" > ~/.r10k/github-token
+          chmod 600 ~/.r10k/github-token
+
+          # Create r10k.yaml with oauth_token configuration
+          cat > ~/.r10k/r10k.yaml <<EOF
+          cachedir: ~/.r10k/cache
+
+          git:
+            oauth_token: ~/.r10k/github-token
 
           forge:
-            baseurl: 'https://forge.puppet.com'
-
-          deploy:
-            purge_levels: ['deployment', 'puppetfile']
-
-          maxworker: 50
-          use_cache: true
+            baseurl: https://forge.puppet.com
           EOF
 
-          cat g10k.yaml
-          echo ""
-          echo "Running g10k to fetch all environments and modules from Puppetfile..."
+          echo "r10k configuration created with GitHub App token"
+          cat ~/.r10k/r10k.yaml
 
-          # Run g10k without -environment flag to checkout all branches
-          g10k -config g10k.yaml -verbose
+      - name: Setup r10k configuration fallback (GITHUB_TOKEN)
+        if: steps.generate-token.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p ~/.r10k
+          echo "${GH_TOKEN}" > ~/.r10k/github-token
+          chmod 600 ~/.r10k/github-token
+
+          cat > ~/.r10k/r10k.yaml <<EOF
+          cachedir: ~/.r10k/cache
+
+          git:
+            oauth_token: ~/.r10k/github-token
+
+          forge:
+            baseurl: https://forge.puppet.com
+          EOF
+
+          echo "r10k configuration created with GITHUB_TOKEN (limited to this repo only)"
+
+      - name: Run r10k to install Puppet modules from Puppetfile
+        run: |
+          ENV_NAME="${{ steps.set-env.outputs.branch_name }}"
+          ENV_DIR="./output/environments/${ENV_NAME}"
+
+          # Verify Puppetfile exists
+          if [ ! -f "${ENV_DIR}/Puppetfile" ]; then
+            echo "ERROR: Puppetfile not found at ${ENV_DIR}/Puppetfile"
+            exit 1
+          fi
+
+          echo "Found Puppetfile at ${ENV_DIR}/Puppetfile"
+          echo "Puppetfile contents:"
+          cat "${ENV_DIR}/Puppetfile"
+          echo ""
+
+          # Change to environment directory
+          cd "${ENV_DIR}"
+
+          # Run r10k puppetfile install with config
+          echo "Running r10k puppetfile install..."
+          r10k puppetfile install --verbose --moduledir=./forge --config ~/.r10k/r10k.yaml
 
           echo ""
-          echo "Environments fetched successfully"
+          echo "Modules installed successfully"
           echo ""
-          echo "Available environments:"
-          ls -la output/environments/
-          echo ""
-          echo "Modules in ${ENV_NAME}/forge directory:"
-          ls -lah output/environments/${ENV_NAME}/forge/ 2>/dev/null || echo "No forge directory found"
+          echo "Installed modules in forge directory:"
+          ls -lah forge/ 2>/dev/null || echo "No modules installed - check Puppetfile"
 
       - name: List generated environment structure
         run: |
@@ -317,7 +361,7 @@ jobs:
             # Sync the environment
             rsync -avz --delete-after \
               --exclude='.git' \
-              --exclude='.g10k' \
+              --exclude='.r10k' \
               artifact/environments/${ENV_NAME}/ \
               ${RSYNC_USER}@${SERVER}:/etc/puppetlabs/code/environments/${ENV_NAME}/
 

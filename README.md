@@ -1,11 +1,11 @@
-# Puppet Environment Management with g10k and GitHub Actions
+# Puppet Environment Management with r10k and GitHub Actions
 
-This repository demonstrates a modern approach to managing Puppet environments using g10k and GitHub Actions, eliminating the need for on-premises r10k installations.
+This repository demonstrates a modern approach to managing Puppet environments using r10k and GitHub Actions, eliminating the need for on-premises r10k installations.
 
 ## Overview
 
 This solution provides:
-- Automated Puppet module management using g10k
+- Automated Puppet module management using r10k
 - CI/CD pipeline for building Puppet environments
 - Artifact-based deployment to Puppet servers
 - No on-premises r10k installation required
@@ -19,7 +19,7 @@ The workflow consists of two jobs that run sequentially:
 #### Build Job (Public GitHub Runners)
 1. Triggers on push to specific branches (production, qa, test, test_*)
 2. Generates GitHub App token for private module access
-3. Uses g10k to resolve and download Puppet modules from Puppetfile
+3. Uses r10k to resolve and download Puppet modules from Puppetfile
 4. Builds complete environment structure
 5. Creates and uploads artifact
 
@@ -51,8 +51,7 @@ The workflow consists of two jobs that run sequentially:
 │       ├── manifests/
 │       │   └── init.pp
 │       └── metadata.json
-├── Puppetfile                              # Puppet module dependencies
-└── g10k.yaml                               # g10k configuration
+└── Puppetfile                              # Puppet module dependencies
 ```
 
 ## Supported Environments
@@ -135,13 +134,11 @@ mod "my_private_module",
   :git => "https://github.com/your-org/puppet-my_private_module",
   :tag => "v1.0.0"
 
-# Public modules can continue using HTTPS or SSH
+# Public modules can continue using HTTPS
 mod "stdlib",
   :git => "https://github.com/puppetlabs/puppetlabs-stdlib",
   :tag => "v9.1.0"
 ```
-
-**Note**: The workflow automatically converts SSH URLs to HTTPS, so both formats work for public repositories.
 
 ### SSH Key Setup for Deployment
 
@@ -227,14 +224,14 @@ Configure these variables in your repository (Settings → Secrets and variables
 Before running the pipeline, ensure you have configured:
 
 **Secrets (for private modules - optional):**
-- ✅ `GH_APP_ID` - GitHub App ID
-- ✅ `GH_APP_PRIVATE_KEY` - GitHub App private key
+- `GH_APP_ID` - GitHub App ID
+- `GH_APP_PRIVATE_KEY` - GitHub App private key
 
 **Secrets (for deployment - required):**
-- ✅ `PUPPET_DEPLOY_SSH_KEY` - SSH private key for Puppet servers
+- `PUPPET_DEPLOY_SSH_KEY` - SSH private key for Puppet servers
 
 **Variables (required):**
-- ✅ `PUPPET_SERVERS` - List of Puppet servers
+- `PUPPET_SERVERS` - List of Puppet servers
 
 **Variables (optional):**
 - `PUPPET_RSYNC_USER` (default: root)
@@ -256,7 +253,7 @@ git push origin production
 ```
 
 The pipeline will automatically:
-1. **Build Job**: Install g10k, download modules, create artifact
+1. **Build Job**: Install r10k, download modules, create artifact
 2. **Deploy Job**: Download artifact, deploy to all Puppet servers, clear cache
 
 **Deployment behavior**:
@@ -362,19 +359,21 @@ modulepath = modules:forge:$basemodulepath
 manifest = manifests/site.pp
 ```
 
-### g10k.yaml
-- **cachedir**: Git repository cache directory
-- **sources**: Environment source configuration
-- **forge**: Puppet Forge settings
-- **deploy**: Deployment and purge settings
-
 ## Troubleshooting
 
 ### Build Pipeline Issues
 
-**Problem**: g10k fails to download modules
+**Problem**: r10k fails to download modules
 ```
 Solution: Check Puppetfile syntax and module availability
+```
+
+**Problem**: r10k fails to access private repositories
+```
+Solution:
+- Verify GitHub App is installed on all required repositories
+- Check GH_APP_ID and GH_APP_PRIVATE_KEY secrets are configured
+- Ensure Puppetfile uses HTTPS URLs for private modules
 ```
 
 **Problem**: Artifact upload fails
@@ -534,7 +533,7 @@ retention-days: 30
 
 ## References
 
-- [g10k Documentation](https://github.com/xorpaul/g10k)
+- [r10k Documentation](https://github.com/puppetlabs/r10k)
 - [Puppet Admin API](https://www.puppet.com/docs/puppet/7/server/admin-api/v1/environment-cache.html)
 - [GitHub Actions](https://docs.github.com/en/actions)
 

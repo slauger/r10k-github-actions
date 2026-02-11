@@ -54,3 +54,6 @@ mod "accounts",
   :git => "https://github.com/puppetlabs/puppetlabs-accounts",
   :tag => "v8.1.0"
 
+mod "helloworld",
+  :git => "https://github.com/slauger/private-puppet-module"
+
