@@ -41,6 +41,7 @@ jobs:
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
 
       - name: Configure Git credentials for private repositories
         if: steps.generate-token.outcome == 'success'
